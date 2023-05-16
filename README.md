@@ -1,59 +1,105 @@
-![Bitnodes](https://bitnodes.io/static/img/bitnodes-github.png "Bitnodes")
+# Bit-crawler (bitnodes)
 
-Bitnodes estimates the relative size of the Bitcoin peer-to-peer network by finding all of its reachable nodes. The current methodology involves sending [getaddr](https://en.bitcoin.it/wiki/Protocol_specification#getaddr) messages recursively to find all the reachable nodes in the network, starting from a set of seed nodes. Bitnodes uses Bitcoin protocol version 70001 (i.e. >= /Satoshi:0.8.x/), so nodes running an older protocol version will be skipped.
+Scan the Bitcoin nodes and find the malicious ones.
 
-See [Provisioning Bitcoin Network Crawler](https://github.com/ayeowch/bitnodes/wiki/Provisioning-Bitcoin-Network-Crawler) for steps on setting up a machine to run Bitnodes. The [Redis Data](https://github.com/ayeowch/bitnodes/wiki/Redis-Data) contains the list of keys and their associated values that are written by the scripts in this project. If you wish to access the data, e.g. network snapshots, collected using this project, see [API](https://bitnodes.io/api/).
-
-### Links
-
-* [Home](https://bitnodes.io/)
-
-* [API](https://bitnodes.io/api/)
-
-* [Network Snapshot](https://bitnodes.io/nodes/)
-
-* [ASN Health](https://bitnodes.io/nodes/asns/)
-
-* [Charts](https://bitnodes.io/dashboard/)
-
-* [Live Map](https://bitnodes.io/nodes/live-map/)
-
-* [Network Map](https://bitnodes.io/nodes/network-map/)
-
-* [Leaderboard](https://bitnodes.io/nodes/leaderboard/)
-
-* [Client Status](https://bitnodes.io/dashboard/bitcoind/)
-
-* [Global Nodes](https://bitnodes.io/nodes/all/)
-
-* [Check Your Node](https://bitnodes.io/#join-the-network)
-
-* [What is a Bitcoin node?](https://bitnodes.io/what-is-a-bitcoin-node/)
-
-* [Addresses List](https://bitnodes.io/nodes/addresses-list/)
-
-### CI
-
-[![CircleCI](https://circleci.com/gh/ayeowch/bitnodes.svg?style=svg)](https://circleci.com/gh/ayeowch/bitnodes)
-
-### Setup
+### Dependencies and setup
 
 ```
 # Install pyenv dependencies
-sudo apt update && sudo apt install make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev
+sudo apt update && sudo apt install make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev apt-transport-https libevent-dev libzstd-dev tcpdump
 
 # Install pyenv
 git clone https://github.com/pyenv/pyenv.git ~/.pyenv
 cd ~/.pyenv && src/configure && make -C src
-echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
-echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
-echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
 echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.profile
 echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.profile
 echo 'eval "$(pyenv init -)"' >> ~/.profile
 
+# Install Redis
+cd && wget https://github.com/redis/redis/archive/7.0.10.tar.gz && tar xzf 7.0.10.tar.gz && cd redis-7.0.10 && make
+sudo make install
+
+sudo nano /etc/init.d/redis_0
+_____________________________
+#!/bin/sh
+EXEC=/usr/local/bin/redis-server
+CLIEXEC=/usr/local/bin/redis-cli
+PIDFILE=/var/run/redis_0.pid
+CONF="/etc/redis/0.conf"
+REDISSOCKET="/run/redis.sock"
+
+case "$1" in
+    start)
+        if [ -f $PIDFILE ]
+        then
+            echo "$PIDFILE exists, process is already running or crashed"
+        else
+            echo "Starting Redis server..."
+            $EXEC $CONF
+        fi
+        ;;
+    stop)
+        if [ ! -f $PIDFILE ]
+        then
+            echo "$PIDFILE does not exist, process is not running"
+        else
+            PID=$(cat $PIDFILE)
+            echo "Stopping ..."
+            $CLIEXEC -s $REDISSOCKET -a $REDISPASSWORD shutdown
+            while [ -x /proc/${PID} ]
+            do
+                echo "Waiting for Redis to shutdown ..."
+                sleep 1
+            done
+            echo "Redis stopped"
+        fi
+        ;;
+    status)
+        PID=$(cat $PIDFILE)
+        if [ ! -x /proc/${PID} ]
+        then
+            echo 'Redis is not running'
+        else
+            echo "Redis is running ($PID)"
+        fi
+        ;;
+    restart)
+        $0 stop
+        $0 start
+        ;;
+    *)
+        echo "Please use start, stop, restart or status as first argument"
+        ;;
+esac
+_____________________________
+
+sudo chmod 755 /etc/init.d/redis_0
+sudo update-rc.d redis_0 defaults
+sudo mkdir /etc/redis
+sudo nano /etc/redis/0.conf
+_____________________________
+pidfile /var/run/redis_0.pid
+daemonize yes
+port 0
+unixsocket /run/redis.sock
+unixsocketperm 777
+save ""
+maxclients 50000
+maxmemory 34326183936
+maxmemory-policy volatile-lru
+notify-keyspace-events K$lz
+activerehashing no
+client-output-buffer-limit normal 512mb 256mb 300
+client-output-buffer-limit replica 512mb 256mb 300
+client-output-buffer-limit pubsub 512mb 256mb 300
+_____________________________
+sudo service redis_0 restart
+
 # Setup project
-source ~/.bashrc
+source ~/.zshrc
 pyenv install 3.11.2
 cd && git clone https://github.com/ayeowch/bitnodes.git && cd bitnodes
 ~/.pyenv/versions/3.11.2/bin/python -m venv venv
@@ -61,5 +107,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 pytest
 ```
+
+### Run
+
+Run the master and some workers with this command:
+
+```
+source venv/bin/activate
+python crawl.py conf/crawl.conf.default master
+```
+
+### More info
 
 See also [Provisioning Bitcoin Network Crawler](https://github.com/ayeowch/bitnodes/wiki/Provisioning-Bitcoin-Network-Crawler).

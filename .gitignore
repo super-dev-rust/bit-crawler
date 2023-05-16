@@ -10,3 +10,5 @@
 /internal-tests/
 /test-reports/
 rsync.sh
+.vscode
+venv
