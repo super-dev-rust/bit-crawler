@@ -26,10 +26,10 @@ seeders =
     seed.bitnodes.io
 
 # Number of concurrent workers (greenlets)
-workers = 5
+workers = 700
 
 # Maximum number of nodes to set up the connection with
-max_nodes = 10
+max_nodes = 1000
 
 # Print debug output
 debug = False

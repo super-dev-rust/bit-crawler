@@ -168,7 +168,8 @@ def connect(key, redis_conn):
 
     redis_conn.set(key, '')  # Set Redis key for a new node.
 
-    (address, port, services) = key[5:].split('-', 2)
+    key_tuple = key[5:].split('-', 2)
+    (address, port, services) = key_tuple
     services = int(services)
     height = redis_conn.get('height')
     if height:
@@ -224,8 +225,50 @@ def connect(key, redis_conn):
             redis_pipe.sadd('pending', str(peer))
         redis_pipe.set(key, '')
         redis_pipe.sadd('up', key)
+        redis_pipe.lpush('mempool_pending', str(key_tuple))
     conn.close()
     redis_pipe.execute()
+
+
+def ask_mempool(key, redis_conn):
+    """
+    Asks the mempool contents from a given node and stores the
+    result in Redis
+    """
+    (address, port, services) = key[5:].split('-', 2)
+    services = int(services)
+    height = redis_conn.get('height')
+    if height:
+        height = int(height)
+
+    proxy = None
+    if address.endswith('.onion') and CONF['onion']:
+        proxy = random.choice(CONF['tor_proxies'])
+
+    conn = Connection((address, int(port)),
+                      (CONF['source_address'], 0),
+                      magic_number=CONF['magic_number'],
+                      socket_timeout=CONF['socket_timeout'],
+                      proxy=proxy,
+                      protocol_version=CONF['protocol_version'],
+                      to_services=services,
+                      from_services=CONF['services'],
+                      user_agent=CONF['user_agent'],
+                      height=height,
+                      relay=CONF['relay'])
+
+    mempool = None
+    try:
+        logging.debug(f'Connecting to {conn.to_addr} ({services})')
+        conn.open()
+        mempool = conn.mempool()
+    except (ProtocolError, ConnectionError, socket.error) as err:
+        logging.debug(f'{conn.to_addr}: {err}')
+
+    if mempool is not None and len(mempool) > 0:
+        logging.info(f'Received mempool from "{key}"')
+
+    gevent.sleep(5)
 
 
 def dump(timestamp, nodes, redis_conn):
@@ -346,12 +389,16 @@ def task(redis_conn):
                 set_excluded_networks(redis_conn)
 
         # switch into mempool-asking mode after meeting max number of nodes
-        number_known_nodes = redis_conn.scard('up')
-        if number_known_nodes >= CONF['max_nodes']:
-            gevent.sleep(60)
-            continue
+        mempool_ask_mode = redis_conn.scard('up') >= CONF['max_nodes'] or random.randint(0, 3) % 2 == 0
+        if mempool_ask_mode:
+            node = redis_conn.lpop('mempool_pending')  # Pop first element from set
+            if node is None:
+                node = redis_conn.spop('pending') # fallback
+            else:
+                redis_conn.lpush('mempool_pending', node)  # And put it back on the last place
+        else:
+            node = redis_conn.spop('pending')  # Pop random node from set.
 
-        node = redis_conn.spop('pending')  # Pop random node from set.
         if node is None:
             gevent.sleep(1)
             continue
@@ -367,7 +414,7 @@ def task(redis_conn):
             continue
 
         key = f'node:{node[0]}-{node[1]}-{node[2]}'
-        if redis_conn.exists(key):
+        if redis_conn.exists(key) and not mempool_ask_mode:
             continue
 
         # Check if prefix has hit its limit.
@@ -378,7 +425,10 @@ def task(redis_conn):
                 logging.debug(f'CIDR {cidr}: {nodes}')
                 continue
 
-        connect(key, redis_conn)
+        if not mempool_ask_mode:
+            connect(key, redis_conn)
+        else:
+            ask_mempool(key, redis_conn)
 
 
 def set_pending(redis_conn):
@@ -611,6 +661,7 @@ def main(argv):
         logging.info('Removing all keys')
         redis_pipe = redis_conn.pipeline()
         redis_pipe.delete('up')
+        redis_pipe.delete('mempool_pending')
         patterns = [
             'node:*',
             'height:*',

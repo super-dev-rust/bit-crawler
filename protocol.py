@@ -396,7 +396,7 @@ class Serializer(object):
             msg.update(self.deserialize_addr_payload(payload, version=2))
         elif msg['command'] == b'inv':
             msg.update(self.deserialize_inv_payload(payload))
-        elif msg['command'] == b'tx':
+        elif msg['command'] == b'tx' or msg['command'] == b'mempool':
             msg.update(self.deserialize_tx_payload(payload))
         elif msg['command'] == b'block':
             msg.update(self.deserialize_block_payload(payload))
@@ -1014,6 +1014,16 @@ class Connection(object):
             self.set_addrv2(sendaddrv2_msg)
 
         return version_msg
+
+    def mempool(self):
+        self.handshake()
+
+        msg = self.serializer.serialize_msg(command=b'mempool')
+        self.send(msg)
+
+        gevent.sleep(1)
+        msgs = self.get_messages(commands=b'mempool')
+        return msgs
 
     def getaddr(self, block=True):
         # [getaddr] >>>
